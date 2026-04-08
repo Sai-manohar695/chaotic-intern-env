@@ -22,33 +22,16 @@ TASKS = ["invoice_processor", "meeting_scheduler", "budget_reallocation"]
 
 
 def log_start(task: str, env: str, model: str):
-    print(json.dumps({
-        "event": "START",
-        "task": task,
-        "env": env,
-        "model": model
-    }), flush=True)
+    print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
 def log_step(step: int, action: dict, reward: float, done: bool, error=None):
-    print(json.dumps({
-        "event": "STEP",
-        "step": step,
-        "action": action,
-        "reward": reward,
-        "done": done,
-        "error": error
-    }), flush=True)
+    action_type = action.get("action_type", "")
+    print(f"[STEP] step={step} action={action_type} reward={reward} done={done} error={error}", flush=True)
 
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]):
-    print(json.dumps({
-        "event": "END",
-        "success": success,
-        "steps": steps,
-        "score": score,
-        "rewards": rewards
-    }), flush=True)
+def log_end(success: bool, steps: int, score: float, rewards: list):
+    print(f"[END] success={success} steps={steps} score={score} rewards={rewards}", flush=True)
 
 
 def build_prompt(obs_dict: dict, history: List[str]) -> str:
