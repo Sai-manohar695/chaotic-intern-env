@@ -1,4 +1,13 @@
-
+---
+title: Chaotic Intern Env
+colorFrom: red
+colorTo: blue
+sdk: docker
+pinned: false
+tags:
+  - openenv
+  - rl
+---
 
 # Chaotic Intern
 

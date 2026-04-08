@@ -2,36 +2,42 @@ import asyncio
 import json
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 from dotenv import load_dotenv
 from openai import OpenAI
 
 load_dotenv()
 
-API_BASE_URL = os.environ.get("API_BASE_URL")  # allowed default ONLY if they inject it
-API_KEY = os.environ["API_KEY"]               # MUST be required (no fallback)
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.groq.com/openai/v1")
+API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "")
+MODEL_NAME = os.getenv("MODEL_NAME", "llama-3.1-8b-instant")
 
 MAX_STEPS = 10
-MAX_TOTAL_REWARD = 1.0
 SUCCESS_SCORE_THRESHOLD = 0.5
 BENCHMARK = "chaotic_intern_env"
 TASKS = ["invoice_processor", "meeting_scheduler", "budget_reallocation"]
 
 
-def log_start(task: str, env: str, model: str):
+def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step: int, action: dict, reward: float, done: bool, error=None):
-    action_type = action.get("action_type", "")
-    print(f"[STEP] step={step} action={action_type} reward={reward} done={done} error={error}", flush=True)
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
 
 
-def log_end(success: bool, steps: int, score: float, rewards: list):
-    print(f"[END] success={success} steps={steps} score={score} rewards={rewards}", flush=True)
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 def build_prompt(obs_dict: dict, history: List[str]) -> str:
@@ -45,7 +51,9 @@ def build_prompt(obs_dict: dict, history: List[str]) -> str:
         )
 
     tool_result = obs_dict.get("tool_result")
-    tool_text = f"\nLast tool result: {json.dumps(tool_result)}" if tool_result else ""
+    tool_text = (
+        f"\nLast tool result: {json.dumps(tool_result)}" if tool_result else ""
+    )
 
     history_text = "\n".join(history[-5:]) if history else "None"
 
@@ -78,8 +86,6 @@ For SEND_MESSAGE:
 For MAKE_DECISION:
 {{"action_type": "MAKE_DECISION", "tool_name": null, "tool_args": null, "reasoning": "your full reasoning", "decision_value": "your final answer"}}
 
-Think carefully. Some messages are misleading — verify before deciding.
-
 RULES:
 - If budget_remaining is 3 or less, you MUST use MAKE_DECISION immediately.
 - MAKE_DECISION requires a non-null decision_value. Never leave it null.
@@ -87,6 +93,7 @@ RULES:
 - For meeting tasks: decision_value must be the day and time e.g. "Wednesday 10am"
 - For budget tasks: decision_value must say what you block, approve, and escalate e.g. "Block 8000 marketing spend, escalate to priya.nair@veltra.ai, approve 85 office supplies"
 - Query the database ONCE then decide. Do not repeat the same query.
+- Think carefully. Some messages are misleading. Verify before deciding.
 """
 
 
@@ -100,34 +107,13 @@ def get_model_action(client: OpenAI, obs_dict: dict, history: List[str]) -> dict
         )
         content = response.choices[0].message.content.strip()
 
-        # Strip markdown code fences
-        if "```" in content:
-            parts = content.split("```")
-            for part in parts:
-                part = part.strip()
-                if part.startswith("json"):
-                    part = part[4:].strip()
-                try:
-                    return json.loads(part)
-                except Exception:
-                    continue
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        content = content.strip()
 
-        # Try direct parse
-        try:
-            return json.loads(content)
-        except Exception:
-            pass
-
-        # Try extracting JSON object from anywhere in the string
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        if start != -1 and end > start:
-            try:
-                return json.loads(content[start:end])
-            except Exception:
-                pass
-
-        raise ValueError("Could not parse JSON from model response")
+        return json.loads(content)
 
     except Exception as exc:
         print(f"[DEBUG] Model request failed: {exc}", flush=True)
@@ -165,6 +151,7 @@ def run_task(task_id: str) -> float:
                 break
 
             action_dict = get_model_action(client, obs_dict, history)
+            action_str = action_dict.get("action_type", "MAKE_DECISION")
 
             try:
                 action = ChaoticInternAction(
@@ -183,6 +170,7 @@ def run_task(task_id: str) -> float:
                     reasoning="Parse error fallback",
                     decision_value="unknown"
                 )
+                action_str = "MAKE_DECISION"
 
             obs = env.step(action)
             obs_dict = obs.model_dump()
@@ -194,15 +182,14 @@ def run_task(task_id: str) -> float:
 
             log_step(
                 step=step,
-                action=action_dict,
+                action=action_str,
                 reward=reward,
                 done=done,
                 error=None
             )
 
             history.append(
-                f"Step {step}: {action_dict.get('action_type')} "
-                f"-> reward {reward:+.2f}"
+                f"Step {step}: {action_str} -> reward {reward:+.2f}"
             )
 
             if done:
@@ -216,7 +203,12 @@ def run_task(task_id: str) -> float:
         print(f"[DEBUG] Episode error: {e}", flush=True)
 
     finally:
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(
+            success=success,
+            steps=steps_taken,
+            score=score,
+            rewards=rewards
+        )
 
     return score
 
@@ -224,13 +216,13 @@ def run_task(task_id: str) -> float:
 def main():
     all_scores = []
     for task_id in TASKS:
-        print(f"\n[DEBUG] Running task: {task_id}", flush=True)
+        print(f"[DEBUG] Running task: {task_id}", flush=True)
         score = run_task(task_id)
         all_scores.append(score)
         print(f"[DEBUG] Task {task_id} score: {score}", flush=True)
 
     avg = round(sum(all_scores) / len(all_scores), 4)
-    print(f"\n[DEBUG] All scores: {all_scores}", flush=True)
+    print(f"[DEBUG] All scores: {all_scores}", flush=True)
     print(f"[DEBUG] Average score: {avg}", flush=True)
 
 
