@@ -9,9 +9,9 @@ from openai import OpenAI
 
 load_dotenv()
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
-API_KEY = os.environ.get("OPENAI_API_KEY", "")
-MODEL_NAME = os.environ.get("MODEL_NAME", "llama-3.1-8b-instant")
+API_BASE_URL = os.environ.get("API_BASE_URL")  # allowed default ONLY if they inject it
+API_KEY = os.environ["API_KEY"]               # MUST be required (no fallback)
+MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
 
 MAX_STEPS = 10
